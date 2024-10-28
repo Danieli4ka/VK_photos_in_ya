@@ -107,7 +107,7 @@ OAuth_token = config.get('OAuth_token')
 
 vk = VK(access_token, user_id)
 user_info = vk.users_info()
-profile_photos = vk.get_profile_photos(count = 2)
+profile_photos = vk.get_profile_photos()
 
 if 'response' in user_info:
     photos = profile_photos['response']['items']

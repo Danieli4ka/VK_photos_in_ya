@@ -14,6 +14,8 @@ class VK:
         self.version = version
         self.params = {'access_token': self.token, 'v': self.version}
 
+    # def _
+
     def users_info(self):
         url = 'https://api.vk.com/method/users.get'
         params = {'user_ids': self.id, 'fields': 'photo_max'}
@@ -27,20 +29,28 @@ class VK:
         return response.json()
 
 # Функция загрузки файла с доступами или ввода необходимых ключей
-def load_config(filename):
-    config = {}
+def load_config(filename='settings.ini'):
+    config = configparser.ConfigParser()
+
     try:
-        with open(filename, 'r') as file:
-            for line in file:
-                key, value = line.strip().split('=')
-                config[key] = value
-    except FileNotFoundError:
-        logging.error(f'File {filename} not found. Input need info')
-        config['access_token'] = input('Input access_token: ')
-        config['user_id'] = input('Input user_id: ')
-        config['OAuth_token'] = input('Input OAuth_token: ')
-        return config
-    return config
+        config.read(filename)
+        access_token = config.get('VK', 'access_token')
+        user_id = config.get('VK', 'user_id')
+        OAuth_token = config.get('Yandex', 'OAuth_token')
+
+    except (configparser.NoSectionError, configparser.NoOptionError) as e:
+        logging.error(f'Error in settings file: {e}')
+        access_token = input('Input access_token: ')
+        user_id = input('Input user_id: ')
+        OAuth_token = input('Input OAuth_token: ')
+
+        config['VK'] = {'access_token': access_token, 'user_id': user_id}
+        config['Yandex'] = {'OAuth_token': OAuth_token}
+
+        with open(filename, 'w') as configfile:
+            config.write(configfile)
+
+    return access_token, user_id, OAuth_token
 
 #Функци для загрузки фото из ВК на Я.диск
 def save_photos(photos):
@@ -99,11 +109,7 @@ def save_photos(photos):
 
 
 
-config = load_config('config.txt')
-
-access_token = config.get('access_token')
-user_id = config.get('user_id')
-OAuth_token = config.get('OAuth_token')
+access_token, user_id, OAuth_token = load_config()
 
 vk = VK(access_token, user_id)
 user_info = vk.users_info()

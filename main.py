@@ -2,6 +2,7 @@ import requests
 import json
 import logging
 from tqdm import tqdm
+import configparser
 
 logging.basicConfig(level=logging.INFO, filename='photo_upload.log', filemode='w',
                     format='%(asctime)s - %(levelname)s - %(message)s')

@@ -1,124 +1,116 @@
-import requests
 import json
 import logging
 from tqdm import tqdm
 import configparser
+from vk_api import VK
+from yandex_api import YandexAPI
+from datetime import datetime
+import requests
+from pprint import pprint
 
 logging.basicConfig(level=logging.INFO, filename='photo_upload.log', filemode='w',
                     format='%(asctime)s - %(levelname)s - %(message)s')
 
-# объявление класса V, получение информации о юзере и о фотографиях
-class VK:
-    def __init__(self, access_token, user_id, version='5.131'):
-        self.token = access_token
-        self.id = user_id
-        self.version = version
-        self.params = {'access_token': self.token, 'v': self.version}
 
-    # def _
-
-    def users_info(self):
-        url = 'https://api.vk.com/method/users.get'
-        params = {'user_ids': self.id, 'fields': 'photo_max'}
-        response = requests.get(url, params={**self.params, **params})
-        return response.json()
-
-    def get_profile_photos(self, count = 5):
-        url = 'https://api.vk.com/method/photos.get'
-        params = {'owner_id': self.id, 'album_id': 'profile', 'extended': 1, 'count': count}
-        response = requests.get(url, params={**self.params, **params})
-        return response.json()
-
-# Функция загрузки файла с доступами или ввода необходимых ключей
 def load_config(filename='settings.ini'):
     config = configparser.ConfigParser()
 
     try:
         config.read(filename)
         access_token = config.get('VK', 'access_token')
-        user_id = config.get('VK', 'user_id')
         OAuth_token = config.get('Yandex', 'OAuth_token')
 
     except (configparser.NoSectionError, configparser.NoOptionError) as e:
         logging.error(f'Error in settings file: {e}')
-        access_token = input('Input access_token: ')
-        user_id = input('Input user_id: ')
-        OAuth_token = input('Input OAuth_token: ')
+        access_token = input('Enter access_token: ')
+        OAuth_token = input('Enter OAuth_token: ')
 
-        config['VK'] = {'access_token': access_token, 'user_id': user_id}
+        config['VK'] = {'access_token': access_token}
         config['Yandex'] = {'OAuth_token': OAuth_token}
 
         with open(filename, 'w') as configfile:
             config.write(configfile)
 
-    return access_token, user_id, OAuth_token
+    return access_token, OAuth_token
 
-#Функци для загрузки фото из ВК на Я.диск
-def save_photos(photos):
-    folder_name = f'photos_{user_id}'
+def user_info():
+    identifier = input('Enter users id or screen name: ')
+    count = input('Enter count photo: ')
+
+    while not count.isdigit():
+        print('Please, enter numeric')
+        count = input('Enter count photo: ')
+
+    return identifier, int(count)
+
+
+def save_photos(vk, yandex_api):
+    vk.resolve_user_id()
+    folder_name = f'photos{vk.id}'
     json_filename = 'photo_data.json'
-    folder_yandex_url = 'https://cloud-api.yandex.net/v1/disk/resources'
-    headers = {'Authorization': f'OAuth {OAuth_token}'}
-    params = {'path': folder_name}
 
-    response = requests.put(folder_yandex_url, headers=headers, params=params)
-    if response.status_code == 201:
-        logging.info(f'Folder {folder_name} created on Yandex Disk.')
-    elif response.status_code == 409:
-        logging.info(f'Folder {folder_name} already exists on Yandex Disk.')
-    else:
-        logging.error(f'Error creating folder on Yandex Disk: {response.json()}')
+    if not yandex_api.create_folder(folder_name):
         return
 
     photo_data = []
+    photos = vk.get_profile_photos(count)
+    photos_by_likes = {}
 
-    for photo in tqdm(photos, desc="Uploading photos to Yandex Disk", unit="photo"):
-        photo_id = str(photo['id'])
+    for photo in photos['response']['items']:
+        likes_count = photo['likes']['count']
         max_size_url = photo['sizes'][-1]['url']
-        likes = photo['likes']['count']
-        filename = f'photo_{photo_id}_likes_{likes}.jpg'
-        full_path = f'{folder_name}/{filename}'
+        photo_date = datetime.fromtimestamp(photo['date']).strftime('%Y-%m-%d')
 
-        # Проверка существования фото на Яндекс.Диске
-        params = {'path': full_path}
-        check_response = requests.get(folder_yandex_url, headers=headers, params=params)
-        if check_response.status_code == 200:
-            logging.info(f'Photo {filename} already exists on Yandex Disk, skipping upload.')
-            continue
+        if likes_count not in photos_by_likes:
+            photos_by_likes[likes_count] = {}
 
-        # Скачивание фото
-        response = requests.get(max_size_url)
-        if response.status_code == 200:
-            upload_url = 'https://cloud-api.yandex.net/v1/disk/resources/upload'
-            upload_params = {'path': full_path, 'overwrite': 'true'}
-            upload_link = requests.get(upload_url, headers=headers, params=upload_params).json().get('href')
-            if upload_link:
-                upload_response = requests.put(upload_link, files={'file': response.content})
-                if upload_response.status_code == 201:
-                    logging.info(f'Photo {filename} save to Yandex Disk.')
-                    photo_info = {'file_name': filename, 'size': photo['sizes'][-1]['type']}
-                    photo_data.append(photo_info)
+        if photo_date not in photos_by_likes[likes_count]:
+            photos_by_likes[likes_count][photo_date] = []
+
+        photos_by_likes[likes_count][photo_date].append({
+            'id': photo['id'],
+            'url': max_size_url,
+            'type': photo['sizes'][-1]['type']
+        })
+
+    for likes, date_dict in tqdm(photos_by_likes.items(), desc="Uploading photos to Yandex Disk", unit="like"):
+        for date_str, photo_list in date_dict.items():
+            for photo in photo_list:
+                if len(photo_list) == 1:
+                    filename = f'likes_{likes}.jpg'
+                elif len(photo_list) > 1 and len(date_dict) == 1:
+                    filename = f'likes_{likes}_{date_str}.jpg'
                 else:
-                    logging.error(f'Error uploading photo {filename}: {upload_response.json()}')
-            else:
-                logging.error(f'Error retrieving upload link: {upload_response.json()}')
+                    filename = f'likes_{likes}_{date_str}_{photo["id"]}.jpg'
 
-    # Сохранение данных о фото на Яндекс.Диске
+                full_path = f'{folder_name}/{filename}'
+
+                if yandex_api.check_file_exists(full_path):
+                    logging.info(f'Photo {filename} already exists on Yandex Disk, skipping upload.')
+                    continue
+
+                response = requests.get(photo['url'])
+                if response.status_code == 200:
+                    upload_link = yandex_api.get_upload_link(full_path)
+                    if upload_link:
+                        if yandex_api.upload_file(upload_link, response.content):
+                            logging.info(f'Photo {filename} saved to Yandex Disk.')
+                            photo_info = {'file_name': filename, 'size': photo['type']}
+                            photo_data.append(photo_info)
+                        else:
+                            logging.error(f'Error uploading photo {filename}.')
+                    else:
+                        logging.error('Error retrieving upload link.')
+                else:
+                    logging.error(f'Error downloading photo {photo["id"]}.')
+
     with open(json_filename, 'w') as json_file:
         json.dump(photo_data, json_file, indent=4, ensure_ascii=False)
         logging.info(f'Saved photo information to JSON: {json_filename}')
 
-
-
-access_token, user_id, OAuth_token = load_config()
-
-vk = VK(access_token, user_id)
-user_info = vk.users_info()
-profile_photos = vk.get_profile_photos()
-
-if 'response' in user_info:
-    photos = profile_photos['response']['items']
-    save_photos(photos)
-else:
-    logging.error('Error retrieving user information:', user_info.get('error', {}).get('error_msg', 'Unknown Error'))
-
+if __name__ == '__main__':
+    access_token, OAuth_token = load_config()
+    user_id, count = user_info()
+    vk = VK(access_token, str(user_id))
+    yandex_api = YandexAPI(OAuth_token)
+    save_photos(vk, yandex_api)
